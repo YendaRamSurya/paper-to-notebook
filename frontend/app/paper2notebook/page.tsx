@@ -10,8 +10,6 @@ import {
   Sparkles,
   Download,
   CheckCircle2,
-  Eye,
-  EyeOff,
   Brain,
   Code2,
   Zap,
@@ -277,8 +275,6 @@ function TrendingButton({ onClick }: { onClick: () => void }) {
 export default function Home() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [arxivUrl, setArxivUrl] = useState('')
-  const [apiKey, setApiKey] = useState('')
-  const [showKey, setShowKey] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState('')
   const [bannerVisible, setBannerVisible] = useState(true)
@@ -397,11 +393,8 @@ export default function Home() {
     setTimeout(() => arxivInputRef.current?.focus(), 600)
   }, [])
 
-  // Load API key from localStorage and check for pending file/URL
+  // Check for pending file/URL from landing page
   useEffect(() => {
-    const savedKey = localStorage.getItem('gemini_api_key')
-    if (savedKey) setApiKey(savedKey)
-
     // Check for pending file from landing page
     const pendingFileData = sessionStorage.getItem('pendingFile')
     const pendingFileName = sessionStorage.getItem('pendingFileName')
@@ -457,16 +450,10 @@ export default function Home() {
     }
   }
 
-  const handleApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const key = e.target.value
-    setApiKey(key)
-    localStorage.setItem('gemini_api_key', key)
-  }
-
   const handleGenerate = async () => {
     // Check if either file or arXiv URL is provided
-    if ((!selectedFile && !arxivUrl.trim()) || !apiKey.trim()) {
-      setError('Please select a PDF or paste an arXiv link, and enter your API key')
+    if (!selectedFile && !arxivUrl.trim()) {
+      setError('Please select a PDF or paste an arXiv link')
       return
     }
 
@@ -494,7 +481,6 @@ export default function Home() {
     setCompletedSteps([false, false, false, false])
 
     const formData = new FormData()
-    formData.append('api_key', apiKey.trim())
 
     // Determine which endpoint to use
     let endpoint = `${API_URL}/api/generate`
@@ -786,40 +772,15 @@ export default function Home() {
               />
             </div>
 
-            {/* API Key Input */}
-            <div className="bg-white/5 backdrop-blur-md border-2 border-[#8ad4ff]/40 rounded-xl p-3 space-y-3">
-              <label className="text-sm font-medium text-white/80">Gemini API Key</label>
-              <div className="flex gap-2">
-                <input
-                  type={showKey ? 'text' : 'password'}
-                  value={apiKey}
-                  onChange={handleApiKeyChange}
-                  placeholder="AIza..."
-                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-sm font-mono focus:border-white/30 focus:outline-none transition-colors"
-                />
-                <button
-                  onClick={() => setShowKey(!showKey)}
-                  className="bg-white/5 border border-white/10 rounded-lg px-4 hover:bg-white/10 transition-colors"
-                >
-                  {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-              <p className="text-xs text-white/50">
-                <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" className="text-[#8ad4ff] hover:text-[#8ad4ff]">
-                  Get a free API key
-                </a> from Google AI Studio - it takes 10 seconds
-              </p>
-            </div>
-
             {/* Generate Button */}
             <button
               onClick={handleGenerate}
-              disabled={(!selectedFile && !arxivUrl.trim()) || !apiKey.trim() || isGenerating}
+              disabled={(!selectedFile && !arxivUrl.trim()) || isGenerating}
               className={cn(
                 "w-full rounded-xl transition-all duration-300 relative overflow-hidden group p-[2px] bg-gradient-to-r from-[#ffd78a] via-[#8ad4ff] to-[#ffa8ff] flex-shrink-0",
                 isGenerating
                   ? "shadow-xl shadow-[#8ad4ff]/40 animate-pulse cursor-not-allowed"
-                  : (!selectedFile && !arxivUrl.trim()) || !apiKey.trim()
+                  : (!selectedFile && !arxivUrl.trim())
                   ? "opacity-50 cursor-not-allowed"
                   : "hover:shadow-xl hover:shadow-[#8ad4ff]/40 active:scale-[0.98]"
               )}
@@ -829,7 +790,7 @@ export default function Home() {
                   <Loader2 className="w-5 h-5 animate-spin" />
                   Generating Notebook...
                 </div>
-              ) : (!selectedFile && !arxivUrl.trim()) || !apiKey.trim() ? (
+              ) : (!selectedFile && !arxivUrl.trim()) ? (
                 <div className="w-full h-full rounded-xl bg-[#0a0a0a] flex items-center justify-center gap-3 font-semibold text-base text-white/40 py-2.5">
                   <Zap className="w-5 h-5" />
                   Generate Notebook

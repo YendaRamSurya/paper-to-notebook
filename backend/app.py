@@ -2,7 +2,7 @@
 """
 Paper to Notebook - Backend API
 Single-file FastAPI application for deploying on Railway.
-Converts research paper PDFs into executable Jupyter notebooks using Gemini LLM.
+Converts research paper PDFs into executable Jupyter notebooks using Lightning AI's inference API.
 """
 from __future__ import annotations
 
@@ -16,12 +16,19 @@ import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
+import fitz  # PyMuPDF
 import nbformat
 from fastapi import FastAPI, File, Form, UploadFile, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
-from google import genai
-from google.genai import types
+from openai import (
+    OpenAI,
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AuthenticationError,
+    RateLimitError,
+)
 from nbformat.v4 import new_notebook, new_code_cell, new_markdown_cell
 from dotenv import load_dotenv
 
@@ -32,8 +39,8 @@ load_dotenv()
 # CONFIGURATION
 # ============================================================================
 
-# Default Gemini model
-DEFAULT_MODEL = "gemini-2.5-pro"
+# Default Lightning AI model (configurable via LIGHTNING_MODEL env var)
+DEFAULT_MODEL = os.environ.get("LIGHTNING_MODEL", "lightning-ai/deepseek-v4-pro")
 
 # Token limits per pipeline step
 MAX_TOKENS_ANALYSIS = 8192
@@ -258,85 +265,101 @@ Return ONLY the JSON array, no extra text.
 # LLM UTILITIES
 # ============================================================================
 
-def _get_api_key(api_key: str | None = None) -> str:
-    """Get API key from parameter, environment, or fallback."""
-    return api_key or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") 
+_client: Optional[OpenAI] = None
 
 
-def call_gemini(
+def _get_client() -> OpenAI:
+    """Get (or lazily create) the singleton Lightning AI OpenAI-compatible client."""
+    global _client
+    if _client is None:
+        api_key = os.environ.get("LIGHTNING_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "LIGHTNING_API_KEY is not configured on the server. "
+                "Set it in the backend environment before generating notebooks."
+            )
+        _client = OpenAI(api_key=api_key, base_url="https://lightning.ai/api/v1")
+    return _client
+
+
+def call_lightning(
     system_prompt: str,
-    user_content: list,
+    user_content: list[str] | str,
     max_tokens: int = 8192,
     model: str = DEFAULT_MODEL,
-    api_key: str | None = None,
     on_thinking: Optional[Callable[[str], None]] = None,
 ) -> str:
-    """Make a Gemini API call and return the text response."""
-    client = genai.Client(api_key=_get_api_key(api_key))
-    config = types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        max_output_tokens=max_tokens,
-        temperature=0.7,
-    )
+    """Make a Lightning AI (OpenAI-compatible) chat completion call and return the text response."""
+    client = _get_client()
+    user_text = "\n\n".join(user_content) if isinstance(user_content, list) else user_content
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": [{"type": "text", "text": user_text}]},
+    ]
 
     if on_thinking:
-        thinking_config = types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            max_output_tokens=max_tokens,
-            temperature=0.7,
-            thinking_config=types.ThinkingConfig(include_thoughts=True),
-        )
         full_text = ""
-        for chunk in client.models.generate_content_stream(
-            model=model, contents=user_content, config=thinking_config
-        ):
-            try:
-                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                    for part in chunk.candidates[0].content.parts:
-                        if getattr(part, 'thought', False):
-                            if part.text:
-                                on_thinking(part.text)
-                        else:
-                            if part.text:
-                                full_text += part.text
-            except (AttributeError, IndexError):
-                if hasattr(chunk, 'text') and chunk.text:
-                    full_text += chunk.text
+        stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.7,
+            stream=True,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            # Some OpenAI-compatible reasoning models expose chain-of-thought via a
+            # `reasoning_content` field on the delta. If this model doesn't populate
+            # it, getattr(..., None) is a safe no-op and on_thinking is never called.
+            reasoning = getattr(delta, "reasoning_content", None)
+            if reasoning:
+                on_thinking(reasoning)
+            if delta.content:
+                full_text += delta.content
         return full_text
     else:
-        response = client.models.generate_content(
-            model=model, contents=user_content, config=config
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.7,
         )
-        return response.text
+        return response.choices[0].message.content
 
 
-def call_gemini_with_retry(
+def call_lightning_with_retry(
     system_prompt: str,
-    user_content: list,
+    user_content: list[str] | str,
     max_tokens: int = 8192,
     model: str = DEFAULT_MODEL,
-    api_key: str | None = None,
     on_thinking: Optional[Callable[[str], None]] = None,
 ) -> str:
-    """Call Gemini API with retry logic for transient errors."""
+    """Call the Lightning AI chat completions API with retry logic for transient errors."""
     last_error = None
 
     for attempt in range(MAX_RETRIES):
         try:
-            return call_gemini(system_prompt, user_content, max_tokens, model, api_key, on_thinking)
+            return call_lightning(system_prompt, user_content, max_tokens, model, on_thinking)
 
-        except Exception as e:
-            error_str = str(e).lower()
+        except AuthenticationError as e:
+            raise ValueError(
+                "Invalid Lightning AI API key. Check the LIGHTNING_API_KEY server configuration."
+            ) from e
 
-            # Check for invalid API key error
-            if any(keyword in error_str for keyword in ["api key not valid", "api_key_invalid", "invalid_argument"]):
-                raise ValueError("Invalid API key. Please check your Gemini API key and try again.")
+        except (RateLimitError, APIConnectionError, APITimeoutError) as e:
+            last_error = e
+            wait = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
+            print(f"  Transient error ({type(e).__name__}). Waiting {wait}s before retry {attempt + 1}/{MAX_RETRIES}...")
+            time.sleep(wait)
 
-            # Retry for transient errors
-            if any(keyword in error_str for keyword in ["429", "rate", "500", "503", "overloaded", "unavailable"]):
+        except APIStatusError as e:
+            if e.status_code in (500, 502, 503, 504):
                 last_error = e
                 wait = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
-                print(f"  Transient error. Waiting {wait}s before retry {attempt + 1}/{MAX_RETRIES}...")
+                print(f"  Transient error ({e.status_code}). Waiting {wait}s before retry {attempt + 1}/{MAX_RETRIES}...")
                 time.sleep(wait)
             else:
                 raise
@@ -344,7 +367,7 @@ def call_gemini_with_retry(
     raise RuntimeError(f"Failed after {MAX_RETRIES} retries. Last error: {last_error}")
 
 
-def parse_llm_json(raw_text: str, step_name: str, model: str, api_key: str | None = None) -> dict | list:
+def parse_llm_json(raw_text: str, step_name: str, model: str) -> dict | list:
     """Parse JSON from LLM response, with cleanup and one repair attempt."""
     text = raw_text.strip()
 
@@ -366,12 +389,11 @@ def parse_llm_json(raw_text: str, step_name: str, model: str, api_key: str | Non
             f"Error: {e}\n\n"
             f"Return ONLY the corrected valid JSON, nothing else."
         )
-        repaired = call_gemini_with_retry(
+        repaired = call_lightning_with_retry(
             system_prompt="You are a JSON repair tool. Return only valid JSON.",
             user_content=[repair_prompt],
             max_tokens=max(len(text) // 2, 4096),
             model=model,
-            api_key=api_key,
         )
         repaired = repaired.strip()
         if repaired.startswith("```"):
@@ -379,6 +401,47 @@ def parse_llm_json(raw_text: str, step_name: str, model: str, api_key: str | Non
         if repaired.endswith("```"):
             repaired = repaired[:-3]
         return json.loads(repaired.strip())
+
+# ============================================================================
+# PDF EXTRACTION
+# ============================================================================
+
+MIN_EXTRACTED_TEXT_CHARS = 200
+MAX_EXTRACTED_TEXT_CHARS = int(os.environ.get("MAX_PDF_TEXT_CHARS", "400000"))  # ~100k tokens
+
+
+def extract_pdf_text(pdf_bytes: bytes) -> str:
+    """Extract plain text from a PDF's pages using PyMuPDF.
+
+    Raises ValueError if the PDF can't be parsed, or if it yields too little
+    extractable text (e.g. a scanned/image-only paper with no text layer).
+    Truncates extremely long documents to fit the model's context window.
+
+    Note: only the text layer is recovered here, unlike Gemini's native
+    multimodal PDF understanding — figures, tables, and diagrams are not
+    interpreted, only whatever text they contain.
+    """
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as e:
+        raise ValueError(f"Could not open PDF for text extraction: {e}") from e
+
+    try:
+        text = "\n\n".join(page.get_text("text") for page in doc).strip()
+    finally:
+        doc.close()
+
+    if len(text) < MIN_EXTRACTED_TEXT_CHARS:
+        raise ValueError(
+            "Could not extract readable text from this PDF. It may be a "
+            "scanned/image-only document without a text layer."
+        )
+
+    if len(text) > MAX_EXTRACTED_TEXT_CHARS:
+        print(f"  Warning: PDF text is very long ({len(text)} chars); truncating to {MAX_EXTRACTED_TEXT_CHARS}.")
+        text = text[:MAX_EXTRACTED_TEXT_CHARS] + "\n\n[... paper truncated for length ...]"
+
+    return text
 
 # ============================================================================
 # NOTEBOOK BUILDER
@@ -436,7 +499,6 @@ def run_pipeline(
     pdf_bytes: bytes,
     model: str = DEFAULT_MODEL,
     on_progress: Optional[ProgressCallback] = None,
-    api_key: Optional[str] = None,
     on_thinking: Optional[ThinkingCallback] = None,
 ) -> bytes:
     """Run the full pipeline on PDF bytes, returning .ipynb bytes."""
@@ -445,19 +507,19 @@ def run_pipeline(
         if on_progress:
             on_progress(step, name, detail, extra)
 
-    pdf_part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
+    _notify(1, "Analyzing paper", "Extracting text from PDF...")
+    paper_text = extract_pdf_text(pdf_bytes)
 
     # Step 1: Paper Analysis
-    _notify(1, "Analyzing paper", "Reading PDF and extracting structure...")
-    analysis_raw = call_gemini_with_retry(
+    _notify(1, "Analyzing paper", "Reading extracted text and analyzing structure...")
+    analysis_raw = call_lightning_with_retry(
         system_prompt=SYSTEM_PROMPT,
-        user_content=[pdf_part, ANALYSIS_PROMPT],
+        user_content=[paper_text, ANALYSIS_PROMPT],
         max_tokens=MAX_TOKENS_ANALYSIS,
         model=model,
-        api_key=api_key,
         on_thinking=on_thinking,
     )
-    analysis = parse_llm_json(analysis_raw, "paper_analysis", model, api_key=api_key)
+    analysis = parse_llm_json(analysis_raw, "paper_analysis", model)
     title = analysis.get("title", "Unknown Paper")
     num_algos = len(analysis.get("algorithms", []))
     # Clean up metrics: strip formula parts (anything after = or ()
@@ -491,15 +553,14 @@ def run_pipeline(
     design_prompt = DESIGN_PROMPT_TEMPLATE.format(
         analysis_json=json.dumps(analysis, indent=2)
     )
-    design_raw = call_gemini_with_retry(
+    design_raw = call_lightning_with_retry(
         system_prompt=SYSTEM_PROMPT,
-        user_content=[pdf_part, design_prompt],
+        user_content=[paper_text, design_prompt],
         max_tokens=MAX_TOKENS_DESIGN,
         model=model,
-        api_key=api_key,
         on_thinking=on_thinking,
     )
-    design = parse_llm_json(design_raw, "toy_design", model, api_key=api_key)
+    design = parse_llm_json(design_raw, "toy_design", model)
     arch = design.get("model_architecture", {})
     _notify(2, "Designing implementation", "Architecture designed", {
         "type": "design",
@@ -516,15 +577,14 @@ def run_pipeline(
         analysis_json=json.dumps(analysis, indent=2),
         design_json=json.dumps(design, indent=2),
     )
-    cells_raw = call_gemini_with_retry(
+    cells_raw = call_lightning_with_retry(
         system_prompt=SYSTEM_PROMPT,
-        user_content=[pdf_part, generate_prompt],
+        user_content=[paper_text, generate_prompt],
         max_tokens=MAX_TOKENS_GENERATE,
         model=model,
-        api_key=api_key,
         on_thinking=on_thinking,
     )
-    cells = parse_llm_json(cells_raw, "generate_cells", model, api_key=api_key)
+    cells = parse_llm_json(cells_raw, "generate_cells", model)
     num_cells = len(cells)
     code_cells = sum(1 for c in cells if c.get("cell_type") == "code")
     previews = []
@@ -549,15 +609,14 @@ def run_pipeline(
     validate_prompt = VALIDATE_PROMPT_TEMPLATE.format(
         cells_json=json.dumps(cells, indent=2)
     )
-    validated_raw = call_gemini_with_retry(
+    validated_raw = call_lightning_with_retry(
         system_prompt=SYSTEM_PROMPT,
         user_content=[validate_prompt],
         max_tokens=MAX_TOKENS_VALIDATE,
         model=model,
-        api_key=api_key,
         on_thinking=on_thinking,
     )
-    validated_cells = parse_llm_json(validated_raw, "validate", model, api_key=api_key)
+    validated_cells = parse_llm_json(validated_raw, "validate", model)
     _notify(4, "Validating code", "Validation complete")
 
     # Build and return validated notebook
@@ -606,17 +665,13 @@ async def root():
 
 
 @app.post("/api/generate-from-arxiv")
-async def generate_from_arxiv(request: Request, arxiv_url: str = Form(...), api_key: str = Form(...)):
+async def generate_from_arxiv(request: Request, arxiv_url: str = Form(...)):
     """Generate notebook from arXiv URL."""
     try:
         import httpx
         import re
     except ImportError:
         raise HTTPException(500, "httpx not installed")
-
-    api_key = api_key.strip()
-    if not api_key:
-        raise HTTPException(400, "Gemini API key is required")
 
     # Extract arXiv paper ID from URL
     match = re.search(r'arxiv\.org/(?:abs|pdf)/([0-9]+\.[0-9]+)', arxiv_url)
@@ -673,7 +728,7 @@ async def generate_from_arxiv(request: Request, arxiv_url: str = Form(...), api_
                     None,
                     lambda: run_pipeline(
                         pdf_bytes, DEFAULT_MODEL, on_progress,
-                        api_key=api_key, on_thinking=on_thinking,
+                        on_thinking=on_thinking,
                     ),
                 )
 
@@ -738,14 +793,10 @@ async def generate_from_arxiv(request: Request, arxiv_url: str = Form(...), api_
 
 
 @app.post("/api/generate")
-async def generate(request: Request, file: UploadFile = File(...), api_key: str = Form(...)):
+async def generate(request: Request, file: UploadFile = File(...)):
     """Generate notebook from PDF with streaming progress."""
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "File must be a PDF")
-
-    api_key = api_key.strip()
-    if not api_key:
-        raise HTTPException(400, "Gemini API key is required")
 
     pdf_bytes = await file.read()
     size_mb = len(pdf_bytes) / (1024 * 1024)
@@ -777,7 +828,7 @@ async def generate(request: Request, file: UploadFile = File(...), api_key: str 
                     None,
                     lambda: run_pipeline(
                         pdf_bytes, DEFAULT_MODEL, on_progress,
-                        api_key=api_key, on_thinking=on_thinking,
+                        on_thinking=on_thinking,
                     ),
                 )
 
