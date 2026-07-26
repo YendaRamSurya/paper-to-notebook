@@ -11,6 +11,24 @@ sets up: one persistent app for the FastAPI backend, one for the Next.js fronten
 
 Reference: https://lightning.ai/docs/platform/build/host-web-apps
 
+## Naming standard: `paper-to-code`
+
+Lightning's own docs don't spell out the exact URL scheme for hosted apps (whether
+it's studio-name-based, app-name-based, or an assigned id), so treat this as a
+convention to apply consistently rather than a guaranteed URL format:
+
+- **Studio name**: rename this Studio to `paper-to-code` in the Lightning dashboard
+  (Studio settings → Rename). Do this first — it's the most likely component to show
+  up in any auto-assigned hostname.
+- **App names**: whenever the app-hosting panel asks for a name for an app you're
+  adding, use:
+  - `paper-to-code-api` for the backend (step 1)
+  - `paper-to-code` for the frontend (step 3) — this is the one users actually visit,
+    so it gets the plain name.
+- After each app comes up, check the URL Lightning assigns. If it doesn't include
+  `paper-to-code` as expected, look for a rename/custom-slug option on that specific
+  app's settings before falling back to a custom domain.
+
 ## Why two steps, in this order
 
 The frontend bakes `NEXT_PUBLIC_API_URL` into its production build at **build time**
@@ -20,9 +38,9 @@ stable URL, and the frontend must be (re)built after that URL is known.
 
 ## 1. Deploy the backend
 
-1. In the Studio, open the app-hosting/plugin panel and add an app for
-   `paper-to-notebook/backend`, using the existing start command from
-   `backend/Procfile`:
+1. In the Studio, open the app-hosting/plugin panel and add an app named
+   `paper-to-code-api` for `paper-to-notebook/backend`, using the existing start
+   command from `backend/Procfile`:
    ```
    uvicorn app:app --host 0.0.0.0 --port $PORT
    ```
@@ -48,7 +66,8 @@ stable URL, and the frontend must be (re)built after that URL is known.
 
 ## 3. Deploy the frontend
 
-1. Add a second app in the Studio for `paper-to-notebook/frontend`, started with:
+1. Add a second app in the Studio, named `paper-to-code`, for
+   `paper-to-notebook/frontend`, started with:
    ```
    npm run start
    ```
