@@ -18,7 +18,7 @@ from typing import Callable, Optional
 
 import fitz  # PyMuPDF
 import nbformat
-from fastapi import FastAPI, File, Form, UploadFile, Request, HTTPException
+from fastapi import FastAPI, File, Form, UploadFile, Request, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from openai import (
@@ -914,8 +914,8 @@ async def download(job_id: str):
 
 
 @app.post("/api/create-gist/{job_id}")
-async def create_gist(job_id: str):
-    """Create a GitHub Gist for opening in Colab."""
+async def create_gist(job_id: str, x_github_token: str | None = Header(default=None)):
+    """Create a GitHub Gist for opening in Colab, using the requesting user's own GitHub token."""
     try:
         import httpx
     except ImportError:
@@ -945,10 +945,10 @@ async def create_gist(job_id: str):
         print(f"Error reading notebook: {e}")
         raise HTTPException(500, f"Failed to read notebook: {str(e)}")
 
-    # Get GitHub token
-    github_token = os.getenv("GITHUB_TOKEN")
+    # Prefer the requesting user's own token; fall back to a server-configured one (dev/testing only)
+    github_token = x_github_token or os.getenv("GITHUB_TOKEN")
     if not github_token:
-        raise HTTPException(500, "GITHUB_TOKEN not configured in backend")
+        raise HTTPException(400, "No GitHub token provided. Add your token via the key icon and try again.")
 
     # Create GitHub Gist
     try:

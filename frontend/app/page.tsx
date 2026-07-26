@@ -9,8 +9,6 @@ import { TestimonialsColumn } from '@/components/ui/testimonials-columns-1'
 
 export default function LandingPage() {
   const [arxivUrl, setArxivUrl] = useState('')
-  const [bannerVisible, setBannerVisible] = useState(true)
-  const [productsDropdown, setProductsDropdown] = useState(false)
   const router = useRouter()
   const videoRef = useRef<HTMLVideoElement>(null)
 
@@ -72,38 +70,6 @@ export default function LandingPage() {
             <span className="text-xl font-bold">Paper2Notebook</span>
           </div>
           <div className="hidden md:flex items-center gap-8">
-            <div className="relative">
-              <button
-                onClick={() => setProductsDropdown(!productsDropdown)}
-                onBlur={() => setTimeout(() => setProductsDropdown(false), 200)}
-                className="text-sm hover:text-[#8ad4ff] transition-colors flex items-center gap-1"
-              >
-                Products
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-              {productsDropdown && (
-                <div className="absolute top-full mt-2 left-0 bg-[#0a0a0a] border border-white/10 rounded-lg shadow-xl min-w-[200px] py-2">
-                  <a
-                    href="https://vizz.vizuara.ai"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block px-4 py-2 text-sm hover:bg-white/5 hover:text-[#8ad4ff] transition-colors"
-                  >
-                    Vizz-AI
-                  </a>
-                  <a
-                    href="https://dynaroute.vizuara.ai"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block px-4 py-2 text-sm hover:bg-white/5 hover:text-[#8ad4ff] transition-colors"
-                  >
-                    Dynaroute
-                  </a>
-                </div>
-              )}
-            </div>
             <a href="#how-it-works" className="text-sm hover:text-[#8ad4ff] transition-colors">How It Works</a>
             <a href="#features" className="text-sm hover:text-[#8ad4ff] transition-colors">Features</a>
             <a
@@ -119,34 +85,8 @@ export default function LandingPage() {
         </div>
       </nav>
 
-      {/* Banner */}
-      {bannerVisible && (
-        <div className="fixed top-16 w-full z-40 bg-[#8ad4ff] py-1.5">
-          <div className="max-w-7xl mx-auto px-6 flex items-center justify-center gap-4 relative">
-            <span className="text-sm font-medium text-black">Try our new Personalized AI tutor</span>
-            <a
-              href="https://vizz.vizuara.ai"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-full text-sm font-medium text-black transition-colors"
-            >
-              Vizz-AI →
-            </a>
-            <button
-              onClick={() => setBannerVisible(false)}
-              className="absolute right-6 text-black hover:text-black/80 transition-colors"
-              aria-label="Close banner"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Hero Section */}
-      <main className="relative pt-40 pb-40 overflow-hidden">
+      <main className="relative pt-28 pb-40 overflow-hidden">
         {/* Background gradient */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-full bg-gradient-to-b from-[#8ad4ff]/10 via-transparent to-transparent pointer-events-none"></div>
 

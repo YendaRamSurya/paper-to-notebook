@@ -277,7 +277,6 @@ export default function Home() {
   const [arxivUrl, setArxivUrl] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState('')
-  const [bannerVisible, setBannerVisible] = useState(true)
 
   // Progress tracking
   const [steps, setSteps] = useState<Array<{ name: string; detail: string }>>([])
@@ -291,6 +290,25 @@ export default function Home() {
   const [activities, setActivities] = useState<any[]>([])
   const [showDone, setShowDone] = useState(false)
   const [thinkingExpanded, setThinkingExpanded] = useState(false)
+
+  // Per-user GitHub token (used to create the Gist behind "Open in Colab")
+  const [githubToken, setGithubToken] = useState('')
+  const [showTokenModal, setShowTokenModal] = useState(false)
+  const [tokenInput, setTokenInput] = useState('')
+
+  useEffect(() => {
+    const stored = localStorage.getItem('github_pat')
+    if (stored) setGithubToken(stored)
+  }, [])
+
+  const saveGithubToken = (token: string) => {
+    const trimmed = token.trim()
+    if (!trimmed) return
+    localStorage.setItem('github_pat', trimmed)
+    setGithubToken(trimmed)
+    setShowTokenModal(false)
+    setTokenInput('')
+  }
 
   // Trending papers
   const [trendingPapers, setTrendingPapers] = useState<TrendingPaper[]>([])
@@ -636,32 +654,6 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-[#050505] text-white overflow-x-hidden relative font-sans">
-      {/* Banner */}
-      {bannerVisible && (
-        <div className="fixed top-0 w-full z-50 bg-[#8ad4ff] py-1.5">
-          <div className="max-w-7xl mx-auto px-6 flex items-center justify-center gap-4 relative">
-            <span className="text-sm font-medium text-black">Try our new Personalized AI tutor</span>
-            <a
-              href="https://vizz.vizuara.ai"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-full text-sm font-medium text-black transition-colors"
-            >
-              Vizz-AI →
-            </a>
-            <button
-              onClick={() => setBannerVisible(false)}
-              className="absolute right-6 text-black hover:text-black/80 transition-colors"
-              aria-label="Close banner"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Background Gradients */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-900/10 rounded-full blur-[120px] animate-pulse-glow" />
@@ -669,7 +661,7 @@ export default function Home() {
         <div className="absolute top-[40%] left-[50%] -translate-x-1/2 w-[60%] h-[60%] bg-purple-900/5 rounded-full blur-[150px]" />
       </div>
 
-      <div className="container mx-auto px-4 pt-16 pb-6 relative z-10 max-w-6xl">
+      <div className="container mx-auto px-4 pt-8 pb-6 relative z-10 max-w-6xl">
         <Hero />
         <div className="flex justify-center mb-6 -mt-2 relative z-[60]">
           <TrendingButton onClick={() => trendingSectionRef.current?.scrollIntoView({ behavior: 'smooth' })} />
@@ -1185,15 +1177,22 @@ export default function Home() {
                           </a>
                           <button
                             onClick={async () => {
+                              if (!githubToken) {
+                                setShowTokenModal(true)
+                                return
+                              }
                               try {
-                                // Create GitHub Gist via backend (uses GitHub token)
+                                // Create GitHub Gist via backend, using the user's own token
                                 const gistResponse = await fetch(`${API_URL}/api/create-gist/${finalJobId}`, {
                                   method: 'POST',
+                                  headers: {
+                                    'X-GitHub-Token': githubToken,
+                                  },
                                 });
 
                                 if (!gistResponse.ok) {
                                   const errorText = await gistResponse.text();
-                                  throw new Error(`Failed to create Gist: ${errorText}`);
+                                  throw new Error(errorText || `Request failed (${gistResponse.status})`);
                                 }
 
                                 const gistData = await gistResponse.json();
@@ -1212,6 +1211,12 @@ export default function Home() {
                           </button>
                         </div>
                       )}
+                      <button
+                        onClick={() => setShowTokenModal(true)}
+                        className="mt-3 text-xs text-white/40 hover:text-[#8ad4ff] transition-colors underline underline-offset-2"
+                      >
+                        {githubToken ? 'Change GitHub token' : 'Set your GitHub token (needed for Colab)'}
+                      </button>
                     </motion.div>
                   )}
 
@@ -1360,6 +1365,73 @@ export default function Home() {
               <h2 className="text-lg font-bold text-white leading-snug">{arxivMeta.title}</h2>
               <p className="text-sm text-white/50">{arxivMeta.authors}</p>
               <p className="text-sm text-white/70 leading-relaxed">{arxivMeta.abstract}</p>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {/* GitHub token modal (used to create the Gist behind "Open in Colab") */}
+        {showTokenModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-6"
+            onClick={() => setShowTokenModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-[#0a0a0a] border border-white/10 rounded-2xl max-w-md w-full p-6 space-y-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <h2 className="text-lg font-bold text-white">Your GitHub token</h2>
+                <button onClick={() => setShowTokenModal(false)} className="text-white/40 hover:text-white shrink-0">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <p className="text-sm text-white/60 leading-relaxed">
+                "Open in Colab" creates a GitHub Gist on your behalf, so it needs a Personal Access Token
+                with the <span className="text-white/80 font-medium">gist</span> scope. Generate one at{' '}
+                <a
+                  href="https://github.com/settings/tokens/new?scopes=gist&description=Paper2Notebook"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#8ad4ff] hover:underline"
+                >
+                  github.com/settings/tokens
+                </a>. It's stored only in your browser and sent directly to our backend.
+              </p>
+              <input
+                type="password"
+                value={tokenInput}
+                onChange={e => setTokenInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') saveGithubToken(tokenInput) }}
+                placeholder="ghp_..."
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-[#8ad4ff]/50"
+                autoFocus
+              />
+              <div className="flex gap-3">
+                {githubToken && (
+                  <button
+                    onClick={() => {
+                      localStorage.removeItem('github_pat')
+                      setGithubToken('')
+                      setShowTokenModal(false)
+                    }}
+                    className="flex-1 text-sm text-white/50 hover:text-white border border-white/10 rounded-lg px-4 py-2.5 transition-colors"
+                  >
+                    Remove token
+                  </button>
+                )}
+                <button
+                  onClick={() => saveGithubToken(tokenInput)}
+                  disabled={!tokenInput.trim()}
+                  className="flex-1 bg-white hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-black rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors"
+                >
+                  Save token
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}
